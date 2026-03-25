@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>YouTube → S3</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            max-width: 800px;
+            margin: auto;
+        }
+        input {
+            display: block;
+            margin: 5px 0;
+            width: 100%;
+        }
+        button {
+            margin-top: 10px;
+        }
+        #log {
+            background: #111;
+            color: #0f0;
+            padding: 10px;
+            height: 200px;
+            overflow-y: auto;
+        }
+        #status {
+            margin-top: 10px;
+        }
+        #heartbeat {
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+
+<h2>YouTube → S3 uploader</h2>
+
+<form id="form">
+    <input name="endpoint" placeholder="S3 endpoint">
+    <input name="access_key" placeholder="Access key">
+    <input name="secret_key" placeholder="Secret key">
+    <input name="bucket" placeholder="Bucket">
+    <input name="key" placeholder="Object key">
+    <input name="url" placeholder="YouTube URL">
+    <button type="submit">Start</button>
+</form>
+
+<div id="status"></div>
+<div id="heartbeat"></div>
+
+<h3>Uploads</h3>
+<div id="log"></div>
+
+<script>
+const log = document.getElementById("log");
+const statusDiv = document.getElementById("status");
+const heartbeatDiv = document.getElementById("heartbeat");
+
+let heartbeatCount = 0;
+let lastHeartbeat = null;
+
+document.getElementById("form").onsubmit = (e) => {
+    e.preventDefault();
+
+    log.textContent = "";
+    statusDiv.textContent = "";
+    heartbeatDiv.textContent = "";
+    heartbeatCount = 0;
+
+    const params = new URLSearchParams(new FormData(e.target));
+    const es = new EventSource("/stream?" + params.toString());
+
+    es.onmessage = (e) => {
+        const data = JSON.parse(e.data);
+
+        if (data.type === "upload") {
+            log.textContent += `Part ${data.part} uploaded (${data.bytes} bytes)\n`;
+            log.scrollTop = log.scrollHeight;
+        }
+
+        else if (data.type === "status") {
+            statusDiv.textContent = data.message;
+        }
+
+        else if (data.type === "heartbeat") {
+            heartbeatCount = data.count;
+            lastHeartbeat = new Date().toLocaleTimeString();
+            heartbeatDiv.textContent =
+                `Activity signals: ${heartbeatCount} | Last: ${lastHeartbeat}`;
+        }
+
+        else if (data.type === "error") {
+            statusDiv.textContent = "Error: " + data.message;
+            es.close();
+        }
+    };
+
+    es.onerror = () => {
+        es.close();
+    };
+};
+</script>
+
+</body>
+</html>

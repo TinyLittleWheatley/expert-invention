@@ -1,138 +1,64 @@
 #!/usr/bin/env python3
-
 import argparse
 import subprocess
 import shlex
 import boto3
+import os
 import sys
-
-CHUNK_SIZE = 5 * 1024 * 1024  # 5MB
-
 
 def log(msg):
     sys.stdout.write(msg + "\n")
     sys.stdout.flush()
 
+def download_youtube(url, out_dir):
+    """
+    Download YouTube video using yt-dlp into out_dir.
+    Returns the absolute path to the downloaded file.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    # Save file as "<title>.ext"
+    cmd = f'yt-dlp -o "{out_dir}/%(title)s.%(ext)s" "{url}"'
+    log(f"[INFO] Running: {cmd}")
+    subprocess.run(shlex.split(cmd), check=True)
+    
+    # find the file in out_dir (assume only 1 new file)
+    files = os.listdir(out_dir)
+    if not files:
+        raise FileNotFoundError("yt-dlp did not produce any file")
+    return os.path.join(out_dir, files[0])
 
-def upload_stream_to_s3(stream, s3, bucket, key):
-    mp = s3.create_multipart_upload(Bucket=bucket, Key=key)
-    upload_id = mp["UploadId"]
+def upload_file_to_s3(file_path, endpoint, access_key, secret_key, bucket):
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=endpoint,
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+    )
 
-    parts = []
-    part_number = 1
-    buffer = b""
-    total_uploaded = 0
-
-    try:
-        while True:
-            chunk = stream.read(64 * 1024)
-            if not chunk:
-                break
-
-            buffer += chunk
-
-            if len(buffer) >= CHUNK_SIZE:
-                resp = s3.upload_part(
-                    Bucket=bucket,
-                    Key=key,
-                    PartNumber=part_number,
-                    UploadId=upload_id,
-                    Body=buffer,
-                )
-
-                parts.append({
-                    "PartNumber": part_number,
-                    "ETag": resp["ETag"]
-                })
-
-                total_uploaded += len(buffer)
-
-                log(f"[UPLOAD] part={part_number} bytes={len(buffer)} total={total_uploaded}")
-
-                part_number += 1
-                buffer = b""
-
-        # final part
-        if buffer:
-            resp = s3.upload_part(
-                Bucket=bucket,
-                Key=key,
-                PartNumber=part_number,
-                UploadId=upload_id,
-                Body=buffer,
-            )
-
-            parts.append({
-                "PartNumber": part_number,
-                "ETag": resp["ETag"]
-            })
-
-            total_uploaded += len(buffer)
-
-        s3.complete_multipart_upload(
-            Bucket=bucket,
-            Key=key,
-            UploadId=upload_id,
-            MultipartUpload={"Parts": parts},
-        )
-
-        log("[DONE] upload complete")
-
-    except Exception as e:
-        log(f"[ERROR] {e}")
-        s3.abort_multipart_upload(
-            Bucket=bucket,
-            Key=key,
-            UploadId=upload_id,
-        )
-        raise
-
+    key = os.path.basename(file_path)
+    log(f"[INFO] Uploading {file_path} → s3://{bucket}/{key}")
+    s3.upload_file(file_path, bucket, key)
+    log("[DONE] Upload complete")
 
 def main():
-    parser = argparse.ArgumentParser(description="YouTube → S3 uploader (stateless)")
-
+    parser = argparse.ArgumentParser(description="Download YouTube video and upload to S3")
     parser.add_argument("--endpoint", required=True)
     parser.add_argument("--access-key", required=True)
     parser.add_argument("--secret-key", required=True)
     parser.add_argument("--bucket", required=True)
-    parser.add_argument("--key", required=True)
     parser.add_argument("--url", required=True)
-
+    parser.add_argument("--tmp-dir", default="downloads", help="Temporary download directory")
     args = parser.parse_args()
 
-    # init S3 client
-    s3 = boto3.client(
-        "s3",
-        endpoint_url=args.endpoint,
-        aws_access_key_id=args.access_key,
-        aws_secret_access_key=args.secret_key,
-    )
-
-    # yt-dlp command (stream to stdout)
-    cmd = f'yt-dlp -o - "{args.url}"'
-
-    log("[INFO] starting yt-dlp...")
-
-    process = subprocess.Popen(
-        shlex.split(cmd),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        bufsize=0
-    )
-
     try:
-        upload_stream_to_s3(process.stdout, s3, args.bucket, args.key)
-
-        process.wait()
-
-        if process.returncode != 0:
-            err = process.stderr.read().decode()
-            log(f"[ERROR] yt-dlp failed:\n{err}")
-
-    except KeyboardInterrupt:
-        log("[ABORT] interrupted")
-        process.kill()
-
+        file_path = download_youtube(args.url, args.tmp_dir)
+        upload_file_to_s3(file_path, args.endpoint, args.access_key, args.secret_key, args.bucket)
+    finally:
+        # Optional cleanup
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        if os.path.isdir(args.tmp_dir) and not os.listdir(args.tmp_dir):
+            os.rmdir(args.tmp_dir)
 
 if __name__ == "__main__":
     main()

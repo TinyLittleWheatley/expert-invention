@@ -10,22 +10,27 @@ def log(msg):
     sys.stdout.write(msg + "\n")
     sys.stdout.flush()
 
+def get_video_filename(url, out_dir):
+    """
+    Ask yt-dlp for the final filename using template.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    cmd = f'yt-dlp --get-filename -o "{out_dir}/%(title)s.%(ext)s" "{url}"'
+    result = subprocess.run(shlex.split(cmd), capture_output=True, text=True, check=True)
+    filename = result.stdout.strip()
+    return filename
+
 def download_youtube(url, out_dir):
     """
     Download YouTube video using yt-dlp into out_dir.
     Returns the absolute path to the downloaded file.
     """
-    os.makedirs(out_dir, exist_ok=True)
-    # Save file as "<title>.ext"
     cmd = f'yt-dlp -o "{out_dir}/%(title)s.%(ext)s" "{url}"'
-    log(f"[INFO] Running: {cmd}")
+    log(f"[INFO] Downloading video: {url}")
     subprocess.run(shlex.split(cmd), check=True)
-    
-    # find the file in out_dir (assume only 1 new file)
-    files = os.listdir(out_dir)
-    if not files:
-        raise FileNotFoundError("yt-dlp did not produce any file")
-    return os.path.join(out_dir, files[0])
+
+    # Get the filename (yt-dlp will have created this)
+    return get_video_filename(url, out_dir)
 
 def upload_file_to_s3(file_path, endpoint, access_key, secret_key, bucket):
     s3 = boto3.client(
@@ -47,18 +52,18 @@ def main():
     parser.add_argument("--secret-key", required=True)
     parser.add_argument("--bucket", required=True)
     parser.add_argument("--url", required=True)
-    parser.add_argument("--tmp-dir", default="downloads", help="Temporary download directory")
+    parser.add_argument("--out-dir", default="./videos", help="Directory to download videos into")
     args = parser.parse_args()
 
-    try:
-        file_path = download_youtube(args.url, args.tmp_dir)
-        upload_file_to_s3(file_path, args.endpoint, args.access_key, args.secret_key, args.bucket)
-    finally:
-        # Optional cleanup
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        if os.path.isdir(args.tmp_dir) and not os.listdir(args.tmp_dir):
-            os.rmdir(args.tmp_dir)
+    os.makedirs(args.out_dir, exist_ok=True)
+
+    # yt-dlp decides the filename
+    file_path = download_youtube(args.url, args.out_dir)
+    upload_file_to_s3(file_path, args.endpoint, args.access_key, args.secret_key, args.bucket)
+
+    # cleanup optional
+    if os.path.exists(file_path):
+        os.remove(file_path)
 
 if __name__ == "__main__":
     main()

@@ -79,9 +79,30 @@ def download_video(url, out_dir):
     if not stream_list:
         raise Exception("No suitable stream found")
 
+    # ---- LOG AVAILABLE STREAMS ----
+    log("[INFO] Available progressive streams:")
+    for i, s in enumerate(stream_list):
+        log(
+            f"  [{i}] res={s.resolution} "
+            f"fps={getattr(s, 'fps', '?')} "
+            f"mime={s.mime_type} "
+            f"itag={s.itag}"
+        )
+
+    # pick highest
     stream = stream_list[-1]
 
+    # ---- LOG SELECTED STREAM ----
+    log(
+        f"[INFO] Selected stream → "
+        f"res={stream.resolution}, "
+        f"fps={getattr(stream, 'fps', '?')}, "
+        f"mime={stream.mime_type}, "
+        f"itag={stream.itag}"
+    )
+
     log(f"[INFO] Downloading: {title}")
+
     stream.download(output_path=out_dir, filename=filename)
 
     return out_path, filename

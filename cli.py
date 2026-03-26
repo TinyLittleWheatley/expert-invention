@@ -65,9 +65,7 @@ def clean_youtube_url(url):
     return url  # fallback unchanged
 
 def download_video(url, out_dir):
-    url = clean_youtube_url(url)
-
-    yt = YouTube(url)
+    yt = YouTube(url.split("&")[0])
     title = sanitize_filename(yt.title)
 
     filename = f"{title}.mp4"
@@ -75,15 +73,16 @@ def download_video(url, out_dir):
 
     os.makedirs(out_dir, exist_ok=True)
 
-    stream = pick_stream(yt)
+    streams = yt.streams.filter(progressive=True).order_by("resolution")
+    stream_list = list(streams)
 
-    log(f"[INFO] Selected resolution: {stream.resolution}")
+    if not stream_list:
+        raise Exception("No suitable stream found")
+
+    stream = stream_list[-1]
+
     log(f"[INFO] Downloading: {title}")
-
-    stream.download(
-        output_path=out_dir,
-        filename=filename
-    )
+    stream.download(output_path=out_dir, filename=filename)
 
     return out_path, filename
 

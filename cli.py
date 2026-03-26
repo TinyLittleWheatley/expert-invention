@@ -12,9 +12,10 @@ def log(msg):
     sys.stdout.flush()
 
 
-def run(cmd):
-    log(f"[CMD] {cmd}")
-    subprocess.run(cmd, shell=True, check=True)
+def run(cmd_list):
+    log(f"[CMD] {' '.join(cmd_list)}")
+    subprocess.run(cmd_list, check=True)
+
 
 
 def sanitize_filename(name):
@@ -45,8 +46,15 @@ def download_video(url, out_dir):
     return out_path, filename
 
 
+
 def upload_with_s3cmd(file_path, bucket):
-    cmd = f"s3cmd put {file_path} s3://{bucket}/{os.path.basename(file_path)}"
+    cmd = [
+        "s3cmd",
+        "put",
+        file_path,
+        f"s3://{bucket}/{os.path.basename(file_path)}"
+    ]
+
     log(f"[INFO] Uploading → s3://{bucket}/{os.path.basename(file_path)}")
     run(cmd)
     log("[DONE] Upload complete")

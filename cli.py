@@ -67,10 +67,10 @@ def clean_youtube_url(url):
 def download_video(url, out_dir):
     yt = YouTube(url.split("&")[0])
     title = sanitize_filename(yt.title)
+    channel_name = yt.author  # or yt.channel if author isn't correct
 
     filename = f"{title}.mp4"
     out_path = os.path.join(out_dir, filename)
-
     os.makedirs(out_dir, exist_ok=True)
 
     streams = yt.streams.filter(progressive=True).order_by("resolution")
@@ -79,44 +79,41 @@ def download_video(url, out_dir):
     if not stream_list:
         raise Exception("No suitable stream found")
 
-    # ---- LOG AVAILABLE STREAMS ----
+    # logging streams
     log("[INFO] Available progressive streams:")
     for i, s in enumerate(stream_list):
         log(
-            f"  [{i}] res={s.resolution} "
-            f"fps={getattr(s, 'fps', '?')} "
-            f"mime={s.mime_type} "
-            f"itag={s.itag}"
+            f"  [{i}] res={s.resolution} fps={getattr(s, 'fps', '?')} "
+            f"mime={s.mime_type} itag={s.itag}"
         )
 
-    # pick highest
     stream = stream_list[-1]
-
-    # ---- LOG SELECTED STREAM ----
-    log(
-        f"[INFO] Selected stream → "
-        f"res={stream.resolution}, "
-        f"fps={getattr(stream, 'fps', '?')}, "
-        f"mime={stream.mime_type}, "
-        f"itag={stream.itag}"
-    )
-
+    log(f"[INFO] Selected stream → res={stream.resolution}, fps={getattr(stream, 'fps', '?')}, mime={stream.mime_type}, itag={stream.itag}")
     log(f"[INFO] Downloading: {title}")
-
     stream.download(output_path=out_dir, filename=filename)
 
-    return out_path, filename
+    return out_path, filename, channel_name
 
 
-def upload_with_s3cmd(file_path, bucket):
+def upload_with_s3cmd(file_path, bucket, channel_name=None):
+    """
+    Upload the file to s3, optionally prepending channel_name as a directory
+    """
+    if channel_name:
+        # sanitize channel name as well
+        channel_name = re.sub(r'[\\/*?:"<>|]', "", channel_name).strip()
+        s3_key = f"{channel_name}/{os.path.basename(file_path)}"
+    else:
+        s3_key = os.path.basename(file_path)
+
     cmd = [
         "s3cmd",
         "put",
         file_path,
-        f"s3://{bucket}/{os.path.basename(file_path)}"
+        f"s3://{bucket}/{s3_key}"
     ]
 
-    log(f"[INFO] Uploading → s3://{bucket}/{os.path.basename(file_path)}")
+    log(f"[INFO] Uploading → s3://{bucket}/{s3_key}")
     run(cmd)
     log("[DONE] Upload complete")
 
@@ -130,8 +127,8 @@ def main():
     args = parser.parse_args()
 
     try:
-        file_path, filename = download_video(args.url, args.tmp_dir)
-        upload_with_s3cmd(file_path, args.bucket)
+        file_path, filename, channel_name = download_video(args.url, args.tmp_dir)
+        upload_with_s3cmd(file_path, args.bucket, channel_name=channel_name)
 
     finally:
         # cleanup

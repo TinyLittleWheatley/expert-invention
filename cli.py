@@ -4,8 +4,6 @@ import os
 import sys
 import subprocess
 import re
-from pytubefix import YouTube
-
 
 def log(msg):
     sys.stdout.write(msg + "\n")
@@ -64,46 +62,44 @@ def clean_youtube_url(url):
 
     return url  # fallback unchanged
 
-def create_yt(url):
-    cookies_path = "cookies.txt"
 
-    if os.path.exists(cookies_path):
-        log("[INFO] Using cookies.txt")
-        return YouTube(url, cookies=cookies_path)
-    else:
-        log("[INFO] No cookies.txt found, proceeding without login")
-        return YouTube(url)
-        
-def download_video(url, out_dir):
-    yt = create_yt(url.split("&")[0])
-    title = sanitize_filename(yt.title)
-    channel_name = yt.author  # or yt.channel if author isn't correct
-
-    filename = f"{title}.mp4"
-    out_path = os.path.join(out_dir, filename)
+def download_video(url, out_dir, cookies="./cookies.txt"):
     os.makedirs(out_dir, exist_ok=True)
 
-    streams = yt.streams.filter(progressive=True).order_by("resolution")
-    stream_list = list(streams)
+    # clean URL (strip params)
+    url = url.split("&")[0]
 
-    if not stream_list:
-        raise Exception("No suitable stream found")
+    # output template:
+    # %(uploader)s → channel
+    # %(title)s → video title
+    output_template = os.path.join(out_dir, "%(uploader)s/%(title)s.%(ext)s")
 
-    # logging streams
-    log("[INFO] Available progressive streams:")
-    for i, s in enumerate(stream_list):
-        log(
-            f"  [{i}] res={s.resolution} fps={getattr(s, 'fps', '?')} "
-            f"mime={s.mime_type} itag={s.itag}"
-        )
+    cmd = [
+        "yt-dlp",
+        "-f", "best[ext=mp4][height<=1080]/best",
+        "-o", output_template,
+        url
+    ]
 
-    stream = stream_list[-1]
-    log(f"[INFO] Selected stream → res={stream.resolution}, fps={getattr(stream, 'fps', '?')}, mime={stream.mime_type}, itag={stream.itag}")
-    log(f"[INFO] Downloading: {title}")
-    stream.download(output_path=out_dir, filename=filename)
+    # add cookies if provided
+    if cookies and os.path.exists(cookies):
+        log(f"[INFO] Using cookies: {cookies}")
+        cmd.extend(["--cookies", cookies])
+    else:
+        log("[INFO] No cookies used")
 
-    return out_path, filename, channel_name
+    log(f"[INFO] Running yt-dlp...")
+    run(cmd)
 
+    # ---- find downloaded file ----
+    # yt-dlp created: out_dir/channel/title.mp4
+    # we need to locate it
+    for root, _, files in os.walk(out_dir):
+        for f in files:
+            if f.endswith(".mp4"):
+                return os.path.join(root, f), f
+
+    raise Exception("Download failed: no file found")
 
 def upload_with_s3cmd(file_path, bucket, channel_name=None):
     """

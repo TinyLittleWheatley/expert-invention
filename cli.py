@@ -4,6 +4,8 @@ import os
 import sys
 import subprocess
 import re
+from pytubefix import YouTube
+
 
 def log(msg):
     sys.stdout.write(msg + "\n")
@@ -15,102 +17,80 @@ def run(cmd_list):
     subprocess.run(cmd_list, check=True)
 
 
-
-def sanitize_filename(name):
-    """
-    Remove problematic characters for filesystems
-    """
+def sanitize(name):
     name = re.sub(r'[\\/*?:"<>|]', "", name)
-    name = name.strip()
-    return name
+    return name.strip()
+
+
+def clean_url(url):
+    return url.split("&")[0]
+
+
+def create_yt(url):
+    token_path = "./tokens.json"
+
+    if os.path.exists(token_path):
+        log(f"[INFO] Using OAuth token: {token_path}")
+    else:
+        log("[INFO] No token found, will trigger OAuth flow")
+
+    return YouTube(
+        url,
+        use_oauth=True,
+        allow_oauth_cache=True,
+        token_file=token_path
+    )
+
 
 def pick_stream(yt):
     streams = yt.streams.filter(progressive=True)
-
-    # keep only streams with resolution info
     streams = [s for s in streams if s.resolution]
 
-    # convert "720p" → 720
+    if not streams:
+        raise Exception("No progressive streams found")
+
     def res_to_int(s):
         return int(s.resolution.replace("p", ""))
 
-    # sort ascending
     streams.sort(key=res_to_int)
 
-    # pick lowest >= 720
-    for s in streams:
-        if res_to_int(s) >= 720:
-            return s
+    # log available streams
+    log("[INFO] Available streams:")
+    for i, s in enumerate(streams):
+        log(f"  [{i}] {s.resolution} fps={getattr(s, 'fps', '?')} itag={s.itag}")
 
-    # fallback → highest available
-    return streams[-1]
-    
-from urllib.parse import urlparse, parse_qs
+    # pick highest
+    chosen = streams[-1]
 
-def clean_youtube_url(url):
-    parsed = urlparse(url)
-    qs = parse_qs(parsed.query)
-
-    if "v" in qs:
-        video_id = qs["v"][0]
-        return f"https://www.youtube.com/watch?v={video_id}"
-
-    # fallback (short URLs like youtu.be)
-    if "youtu.be" in parsed.netloc:
-        video_id = parsed.path.strip("/")
-        return f"https://www.youtube.com/watch?v={video_id}"
-
-    return url  # fallback unchanged
+    log(f"[INFO] Selected → {chosen.resolution} (itag={chosen.itag})")
+    return chosen
 
 
-def download_video(url, out_dir, cookies="./cookies.txt"):
+def download_video(url, out_dir):
     os.makedirs(out_dir, exist_ok=True)
 
-    # clean URL (strip params)
-    url = url.split("&")[0]
+    url = clean_url(url)
+    yt = create_yt(url)
 
-    # output template:
-    # %(uploader)s → channel
-    # %(title)s → video title
-    output_template = os.path.join(out_dir, "%(uploader)s/%(title)s.%(ext)s")
+    title = sanitize(yt.title)
+    channel = sanitize(yt.author or "unknown")
 
-    cmd = [
-        "yt-dlp",
-        "-f", "best[ext=mp4][height<=1080]/best",
-        "-o", output_template,
-        url
-    ]
+    filename = f"{title}.mp4"
+    channel_dir = os.path.join(out_dir, channel)
+    os.makedirs(channel_dir, exist_ok=True)
 
-    # add cookies if provided
-    if cookies and os.path.exists(cookies):
-        log(f"[INFO] Using cookies: {cookies}")
-        cmd.extend(["--cookies", cookies])
-    else:
-        log("[INFO] No cookies used")
+    out_path = os.path.join(channel_dir, filename)
 
-    log(f"[INFO] Running yt-dlp...")
-    run(cmd)
+    stream = pick_stream(yt)
 
-    # ---- find downloaded file ----
-    # yt-dlp created: out_dir/channel/title.mp4
-    # we need to locate it
-    for root, _, files in os.walk(out_dir):
-        for f in files:
-            if f.endswith(".mp4"):
-                return os.path.join(root, f), f
+    log(f"[INFO] Downloading: {channel} / {title}")
+    stream.download(output_path=channel_dir, filename=filename)
 
-    raise Exception("Download failed: no file found")
+    return out_path, filename, channel
 
-def upload_with_s3cmd(file_path, bucket, channel_name=None):
-    """
-    Upload the file to s3, optionally prepending channel_name as a directory
-    """
-    if channel_name:
-        # sanitize channel name as well
-        channel_name = re.sub(r'[\\/*?:"<>|]', "", channel_name).strip()
-        s3_key = f"{channel_name}/{os.path.basename(file_path)}"
-    else:
-        s3_key = os.path.basename(file_path)
+
+def upload_with_s3cmd(file_path, bucket, channel_name):
+    s3_key = f"{channel_name}/{os.path.basename(file_path)}"
 
     cmd = [
         "s3cmd",
@@ -125,7 +105,9 @@ def upload_with_s3cmd(file_path, bucket, channel_name=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Download YouTube video and upload to S3 (via s3cmd)")
+    parser = argparse.ArgumentParser(
+        description="Download YouTube video (pytubefix + OAuth) and upload to S3"
+    )
     parser.add_argument("--bucket", default="buckk")
     parser.add_argument("--url", required=True)
     parser.add_argument("--tmp-dir", default="./downloads")
@@ -133,15 +115,19 @@ def main():
     args = parser.parse_args()
 
     try:
-        file_path, filename, channel_name = download_video(args.url, args.tmp_dir)
-        upload_with_s3cmd(file_path, args.bucket, channel_name=channel_name)
+        file_path, filename, channel = download_video(args.url, args.tmp_dir)
+        upload_with_s3cmd(file_path, args.bucket, channel)
 
     finally:
-        # cleanup
+        # cleanup file
         if 'file_path' in locals() and os.path.exists(file_path):
             os.remove(file_path)
-        if os.path.isdir(args.tmp_dir) and not os.listdir(args.tmp_dir):
-            os.rmdir(args.tmp_dir)
+
+        # cleanup empty dirs
+        if os.path.isdir(args.tmp_dir):
+            for root, dirs, files in os.walk(args.tmp_dir, topdown=False):
+                if not dirs and not files:
+                    os.rmdir(root)
 
 
 if __name__ == "__main__":

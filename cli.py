@@ -26,8 +26,47 @@ def sanitize_filename(name):
     name = name.strip()
     return name
 
+def pick_stream(yt):
+    streams = yt.streams.filter(progressive=True)
+
+    # keep only streams with resolution info
+    streams = [s for s in streams if s.resolution]
+
+    # convert "720p" → 720
+    def res_to_int(s):
+        return int(s.resolution.replace("p", ""))
+
+    # sort ascending
+    streams.sort(key=res_to_int)
+
+    # pick lowest >= 720
+    for s in streams:
+        if res_to_int(s) >= 720:
+            return s
+
+    # fallback → highest available
+    return streams[-1]
+    
+from urllib.parse import urlparse, parse_qs
+
+def clean_youtube_url(url):
+    parsed = urlparse(url)
+    qs = parse_qs(parsed.query)
+
+    if "v" in qs:
+        video_id = qs["v"][0]
+        return f"https://www.youtube.com/watch?v={video_id}"
+
+    # fallback (short URLs like youtu.be)
+    if "youtu.be" in parsed.netloc:
+        video_id = parsed.path.strip("/")
+        return f"https://www.youtube.com/watch?v={video_id}"
+
+    return url  # fallback unchanged
 
 def download_video(url, out_dir):
+    url = clean_youtube_url(url)
+
     yt = YouTube(url)
     title = sanitize_filename(yt.title)
 
@@ -36,22 +75,17 @@ def download_video(url, out_dir):
 
     os.makedirs(out_dir, exist_ok=True)
 
-    streams = yt.streams.filter(progressive=True).order_by("resolution")
+    stream = pick_stream(yt)
 
-    stream_list = list(streams)
-    
-    if len(stream_list) >= 2:
-        stream = stream_list[1]   # second lowest
-    else:
-        stream = stream_list[0]   # fallback to lowest
-    if not stream:
-        raise Exception("No suitable stream found")
-
+    log(f"[INFO] Selected resolution: {stream.resolution}")
     log(f"[INFO] Downloading: {title}")
-    stream.download(output_path=out_dir, filename=filename)
+
+    stream.download(
+        output_path=out_dir,
+        filename=filename
+    )
 
     return out_path, filename
-
 
 
 def upload_with_s3cmd(file_path, bucket):

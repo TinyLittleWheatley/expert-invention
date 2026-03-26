@@ -64,8 +64,18 @@ def clean_youtube_url(url):
 
     return url  # fallback unchanged
 
+def create_yt(url):
+    cookies_path = "cookies.txt"
+
+    if os.path.exists(cookies_path):
+        log("[INFO] Using cookies.txt")
+        return YouTube(url, cookies=cookies_path)
+    else:
+        log("[INFO] No cookies.txt found, proceeding without login")
+        return YouTube(url)
+        
 def download_video(url, out_dir):
-    yt = YouTube(url.split("&")[0])
+    yt = create_yt(url.split("&")[0])
     title = sanitize_filename(yt.title)
     channel_name = yt.author  # or yt.channel if author isn't correct
 

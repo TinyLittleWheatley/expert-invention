@@ -36,7 +36,14 @@ def download_video(url, out_dir):
 
     os.makedirs(out_dir, exist_ok=True)
 
-    stream = yt.streams.filter(progressive=True).order_by("resolution").desc().first()
+    streams = yt.streams.filter(progressive=True).order_by("resolution")
+
+    stream_list = list(streams)
+    
+    if len(stream_list) >= 2:
+        stream = stream_list[1]   # second lowest
+    else:
+        stream = stream_list[0]   # fallback to lowest
     if not stream:
         raise Exception("No suitable stream found")
 

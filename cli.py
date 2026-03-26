@@ -102,7 +102,7 @@ def upload_with_s3cmd(file_path, bucket):
 
 def main():
     parser = argparse.ArgumentParser(description="Download YouTube video and upload to S3 (via s3cmd)")
-    parser.add_argument("--bucket", required=True)
+    parser.add_argument("--bucket", default="buckk")
     parser.add_argument("--url", required=True)
     parser.add_argument("--tmp-dir", default="./downloads")
 

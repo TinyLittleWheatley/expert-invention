@@ -66,27 +66,40 @@ def pick_stream(yt):
     return chosen
 
 
-def download_video(url, out_dir):
+def download_video(url, out_dir, cookies="./cookies.txt"):
     os.makedirs(out_dir, exist_ok=True)
 
-    url = clean_url(url)
-    yt = create_yt(url)
+    # clean URL
+    url = url.split("&")[0]
 
-    title = sanitize(yt.title)
-    channel = sanitize(yt.author or "unknown")
+    # output: channel/title.mp4
+    output_template = os.path.join(out_dir, "%(uploader)s/%(title)s.%(ext)s")
 
-    filename = f"{title}.mp4"
-    channel_dir = os.path.join(out_dir, channel)
-    os.makedirs(channel_dir, exist_ok=True)
+    cmd = [
+        "yt-dlp",
+        "-o", output_template,
+        url
+    ]
 
-    out_path = os.path.join(channel_dir, filename)
+    # optionally add cookies
+    if cookies and os.path.exists(cookies):
+        log(f"[INFO] Using cookies: {cookies}")
+        cmd.extend(["--cookies", cookies])
+    else:
+        log("[INFO] No cookies used")
 
-    stream = pick_stream(yt)
+    log("[INFO] Running yt-dlp...")
+    run(cmd)
 
-    log(f"[INFO] Downloading: {channel} / {title}")
-    stream.download(output_path=channel_dir, filename=filename)
+    # ---- find downloaded file ----
+    for root, _, files in os.walk(out_dir):
+        for f in files:
+            if f.endswith(".mp4"):
+                file_path = os.path.join(root, f)
+                channel_name = os.path.basename(root)
+                return file_path, f, channel_name
 
-    return out_path, filename, channel
+    raise Exception("Download failed: no file found")
 
 
 def upload_with_s3cmd(file_path, bucket, channel_name):
